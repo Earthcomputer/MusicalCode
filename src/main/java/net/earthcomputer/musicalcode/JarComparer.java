@@ -544,7 +544,7 @@ public class JarComparer {
             if (!fromLabelIndices.get(fromI.dflt).equals(toLabelIndices.get(toI.dflt))) {
                 return true;
             }
-            for (int j = 0; j < fromI.labels.size(); i++) {
+            for (int j = 0; j < fromI.labels.size(); j++) {
                 if (!fromLabelIndices.get(fromI.labels.get(j)).equals(toLabelIndices.get(toI.labels.get(j)))) {
                     return true;
                 }
@@ -556,7 +556,7 @@ public class JarComparer {
             if (!fromLabelIndices.get(fromI.dflt).equals(toLabelIndices.get(toI.dflt))) {
                 return true;
             }
-            for (int j = 0; j < fromI.labels.size(); i++) {
+            for (int j = 0; j < fromI.labels.size(); j++) {
                 if (!fromLabelIndices.get(fromI.labels.get(j)).equals(toLabelIndices.get(toI.labels.get(j)))) {
                     return true;
                 }

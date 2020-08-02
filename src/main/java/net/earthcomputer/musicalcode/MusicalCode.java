@@ -14,8 +14,10 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileReader;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.io.PrintWriter;
 import java.io.UncheckedIOException;
 import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
@@ -23,23 +25,25 @@ import java.net.URL;
 import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.function.Consumer;
 import java.util.jar.JarFile;
 
 public class MusicalCode {
 
     private static final Gson GSON = new Gson();
-    private static final String CACHE_DIR = "cache";
     private static final String VERSION_MANIFEST = "https://launchermeta.mojang.com/mc/game/version_manifest.json";
     private static final String INTERMEDIARY_URL = "https://raw.githubusercontent.com/FabricMC/intermediary/master/mappings/%s.tiny";
     private static final String YARN_URL = "https://maven.fabricmc.net/net/fabricmc/yarn/%1$s/yarn-%1$s-v2.jar";
 
-    public static void main(String[] args) {
+    public static void main(String... args) {
         OptionParser parser = new OptionParser();
         OptionSpec<Void> helpArg = parser.accepts("help", "Displays this help message").forHelp();
         OptionSpec<String> fromArg = parser.accepts("from", "The Minecraft version you're going from").withRequiredArg().required();
         OptionSpec<String> toArg = parser.accepts("to", "The Minecraft version you're going to").withRequiredArg().required();
         OptionSpec<File> configFile = parser.accepts("config", "The config file").withRequiredArg().ofType(File.class).defaultsTo(new File("config.txt"));
         OptionSpec<String> yarnArg = parser.accepts("yarn", "The yarn version to use for named mappings").withRequiredArg();
+        OptionSpec<File> outputArg = parser.accepts("output", "The output file").withRequiredArg().ofType(File.class);
+        OptionSpec<File> cacheDirArg = parser.accepts("cacheDir", "The cache directory").withRequiredArg().ofType(File.class).defaultsTo(new File("cache"));
         OptionSet options = parser.parse(args);
         if (options.has(helpArg)) {
             try {
@@ -50,22 +54,23 @@ public class MusicalCode {
             return;
         }
 
+        File cacheDir = options.valueOf(cacheDirArg);
         String fromVersion = options.valueOf(fromArg);
         String toVersion = options.valueOf(toArg);
         if (fromVersion.equals(toVersion)) {
             throw new RuntimeException("fromVersion == toVersion");
         }
-        File fromJar = downloadAndRemap(fromVersion);
-        File toJar = downloadAndRemap(toVersion);
+        File fromJar = downloadAndRemap(cacheDir, fromVersion);
+        File toJar = downloadAndRemap(cacheDir, toVersion);
 
         TinyRemapper[] remappersToClose;
         Remapper intermediaryToYarnRemapper;
         Remapper yarnToIntermediaryRemapper;
         if (options.has(yarnArg)) {
             String yarnVersion = options.valueOf(yarnArg);
-            File yarnJar = download(String.format(YARN_URL, yarnVersion), "yarn-" + yarnVersion + ".jar");
-            TinyRemapper i2y = getYarnRemapper(toJar, yarnJar, "intermediary", "named");
-            TinyRemapper y2i = getYarnRemapper(toJar, yarnJar, "named", "intermediary");
+            File yarnJar = download(cacheDir, String.format(YARN_URL, yarnVersion), "yarn-" + yarnVersion + ".jar");
+            TinyRemapper i2y = getYarnRemapper(fromJar, yarnJar, "intermediary", "named");
+            TinyRemapper y2i = getYarnRemapper(fromJar, yarnJar, "named", "intermediary");
             remappersToClose = new TinyRemapper[] {i2y, y2i};
             intermediaryToYarnRemapper = i2y.getRemapper();
             yarnToIntermediaryRemapper = y2i.getRemapper();
@@ -76,10 +81,24 @@ public class MusicalCode {
 
         MemberPattern memberPattern = MemberPattern.parse(options.valueOf(configFile), yarnToIntermediaryRemapper);
 
+        Consumer<String> output;
+        PrintWriter outputWriter;
+        if (options.has(outputArg)) {
+            try {
+                outputWriter = new PrintWriter(new FileWriter(options.valueOf(outputArg)));
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+            output = outputWriter::println;
+        } else {
+            outputWriter = null;
+            output = System.out::println;
+        }
+
         System.out.println("Comparing jars...");
         System.out.println("====================================");
         try (JarFile fromJarFile = new JarFile(fromJar); JarFile toJarFile = new JarFile(toJar)) {
-            JarComparer.compare(fromJarFile, toJarFile, memberPattern, intermediaryToYarnRemapper, System.out::println, System.err::println);
+            JarComparer.compare(fromJarFile, toJarFile, memberPattern, intermediaryToYarnRemapper, output, System.err::println);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
@@ -89,15 +108,20 @@ public class MusicalCode {
             remapper.finish();
         }
 
+        if (outputWriter != null) {
+            outputWriter.flush();
+            outputWriter.close();
+        }
+
     }
 
-    private static File downloadAndRemap(String version) {
-        File unmapped = downloadMcJar(version);
-        return remapMcJar(version, unmapped);
+    private static File downloadAndRemap(File cacheDir, String version) {
+        File unmapped = downloadMcJar(cacheDir, version);
+        return remapMcJar(cacheDir, version, unmapped);
     }
 
-    private static File downloadMcJar(String version) {
-        File versionManifestFile = download(VERSION_MANIFEST, "version_manifest.json");
+    private static File downloadMcJar(File cacheDir, String version) {
+        File versionManifestFile = download(cacheDir, VERSION_MANIFEST, "version_manifest.json");
         VersionManifest versionManifest;
         try {
             versionManifest = GSON.fromJson(new FileReader(versionManifestFile), VersionManifest.class);
@@ -115,7 +139,7 @@ public class MusicalCode {
             throw new RuntimeException("Unknown version: " + version);
         }
 
-        File versionFile = download(versionUrl, version + ".json");
+        File versionFile = download(cacheDir, versionUrl, version + ".json");
         Version v;
         try {
             v = GSON.fromJson(new FileReader(versionFile), Version.class);
@@ -123,9 +147,9 @@ public class MusicalCode {
             throw new UncheckedIOException(e);
         }
 
-        File clientJar = download(v.downloads.client.url, version + "-client.jar");
-        File serverJar = download(v.downloads.server.url, version + "-server.jar");
-        File mergedJar = new File(CACHE_DIR, version + "-merged.jar");
+        File clientJar = download(cacheDir, v.downloads.client.url, version + "-client.jar");
+        File serverJar = download(cacheDir, v.downloads.server.url, version + "-server.jar");
+        File mergedJar = new File(cacheDir, version + "-merged.jar");
 
         System.out.println("Merging " + version + " jars...");
         try {
@@ -137,13 +161,13 @@ public class MusicalCode {
         return mergedJar;
     }
 
-    private static File remapMcJar(String version, File input) {
-        File intermediaryMappings = download(String.format(INTERMEDIARY_URL, version), version + "-intermediary.tiny");
+    private static File remapMcJar(File cacheDir, String version, File input) {
+        File intermediaryMappings = download(cacheDir, String.format(INTERMEDIARY_URL, version), version + "-intermediary.tiny");
         System.out.println("Remapping " + version + " to intermediary...");
         TinyRemapper remapper = TinyRemapper.newRemapper()
                 .withMappings(TinyUtils.createTinyMappingProvider(intermediaryMappings.toPath(), "official", "intermediary"))
                 .build();
-        File output = new File(CACHE_DIR, version + "-intermediary.jar");
+        File output = new File(cacheDir, version + "-intermediary.jar");
         try (OutputConsumerPath outputConsumer = new OutputConsumerPath.Builder(output.toPath()).build()) {
             remapper.readInputs(input.toPath());
             remapper.apply(outputConsumer);
@@ -156,14 +180,14 @@ public class MusicalCode {
         return output;
     }
 
-    private static TinyRemapper getYarnRemapper(File mcJar, File yarnJar, String fromNamespace, String toNamespace) {
+    private static TinyRemapper getYarnRemapper(File fromJar, File yarnJar, String fromNamespace, String toNamespace) {
         System.out.println("Building yarn " + fromNamespace + " to " + toNamespace + " remapper...");
         try (JarFile yarnJarFile = new JarFile(yarnJar)) {
             BufferedReader tinyReader = new BufferedReader(new InputStreamReader(yarnJarFile.getInputStream(yarnJarFile.getEntry("mappings/mappings.tiny")), StandardCharsets.UTF_8));
             TinyRemapper remapper = TinyRemapper.newRemapper()
                     .withMappings(TinyUtils.createTinyMappingProvider(tinyReader, fromNamespace, toNamespace))
                     .build();
-            remapper.readInputs(mcJar.toPath());
+            remapper.readInputs(fromJar.toPath());
             remapper.getRemapper(); // force read the mappings
             return remapper;
         } catch (IOException e) {
@@ -172,7 +196,7 @@ public class MusicalCode {
     }
 
     @SuppressWarnings("ResultOfMethodCallIgnored")
-    private static File download(String urlString, String dest) {
+    private static File download(File cacheDir, String urlString, String dest) {
         URL url;
         try {
             url = new URL(urlString);
@@ -181,13 +205,13 @@ public class MusicalCode {
         }
         System.out.println("Downloading " + dest + "...");
 
-        File destFile = new File(CACHE_DIR, dest);
-        File etagFile = new File(CACHE_DIR, dest + ".etag");
+        File destFile = new File(cacheDir, dest);
+        File etagFile = new File(cacheDir, dest + ".etag");
 
         try {
             HttpURLConnection connection = (HttpURLConnection) url.openConnection();
             if (destFile.exists() && etagFile.exists()) {
-                String etag = Files.readString(etagFile.toPath(), StandardCharsets.UTF_8);
+                String etag = com.google.common.io.Files.asCharSource(etagFile, StandardCharsets.UTF_8).read();
                 connection.setRequestProperty("If-None-Match", etag);
             }
 
@@ -215,7 +239,7 @@ public class MusicalCode {
 
             String etag = connection.getHeaderField("ETag");
             if (etag != null) {
-                Files.writeString(etagFile.toPath(), etag, StandardCharsets.UTF_8);
+                com.google.common.io.Files.asCharSink(etagFile, StandardCharsets.UTF_8).write(etag);
             }
             return destFile;
         } catch (UnknownHostException e) {

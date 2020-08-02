@@ -1,5 +1,9 @@
 
-apply plugin: 'java'
+plugins {
+    id 'java'
+    id 'maven-publish'
+    id 'java-gradle-plugin'
+}
 
 repositories {
     mavenCentral()
@@ -9,11 +13,78 @@ repositories {
     }
 }
 
+configurations {
+    standalone
+    implementation.extendsFrom standalone
+}
+
+group = 'net.earthcomputer'
+archivesBaseName = project.name
+sourceCompatibility = 1.8
+targetCompatibility = 1.8
+
 dependencies {
-    implementation 'net.fabricmc:tiny-remapper:0.3.1.72'
-    implementation 'net.fabricmc:stitch:0.5.1+build.77'
-    implementation 'com.google.code.gson:gson:2.8.6'
-    implementation 'org.ow2.asm:asm:8.0.1'
-    implementation 'net.sf.jopt-simple:jopt-simple:5.0.4'
+    standalone 'net.fabricmc:tiny-remapper:0.3.1.72'
+    standalone 'net.fabricmc:stitch:0.5.1+build.77'
+    standalone 'com.google.code.gson:gson:2.8.6'
+    standalone 'com.google.guava:guava:28.0-jre'
+    standalone 'org.ow2.asm:asm:8.0.1'
+    standalone 'net.sf.jopt-simple:jopt-simple:5.0.4'
+
+    implementation gradleApi()
+    compileOnly 'fabric-loom:fabric-loom.gradle.plugin:0.4-SNAPSHOT'
+}
+
+gradlePlugin {
+    plugins {
+        musicalCode {
+            id = 'musical-code'
+            implementationClass = 'net.earthcomputer.musicalcode.gradle.MusicalCodeGradle'
+        }
+    }
+}
+
+task sourcesJar(type: Jar, dependsOn: classes) {
+    classifier = 'sources'
+    from sourceSets.main.allSource
+}
+
+task standaloneJar(type: Jar) {
+    classifier 'standalone'
+    manifest {
+        attributes 'Main-Class': 'net.earthcomputer.musicalcode.MusicalCode'
+    }
+    with jar
+    from {
+        configurations.standalone.collect {
+            it.isDirectory() ? it : zipTree(it).matching { exclude '**/module-info.class' }
+        }
+    }
+}
+
+publishing {
+    publications {
+        plugin(MavenPublication) { publication ->
+            groupId 'musical-code'
+            artifactId 'musical-code.gradle.plugin'
+            version project.version
+
+            from components['java']
+
+            artifact sourcesJar
+            artifact standaloneJar
+        }
+    }
+    repositories {
+        maven {
+            url 'https://api.bintray.com/maven/earthcomputer/util/musical-code/'
+            if (project.hasProperty('bintrayPass')) {
+                credentials {
+                    username = project.getProperty('bintrayUser')
+                    password = project.getProperty('bintrayPass')
+                }
+            }
+        }
+    }
 }
 
