@@ -31,10 +31,19 @@ public class MusicalCode {
 
     public static void main(String[] args) {
         OptionParser parser = new OptionParser();
+        OptionSpec<Void> helpArg = parser.accepts("help", "Displays this help message").forHelp();
         OptionSpec<String> fromArg = parser.accepts("from", "The Minecraft version you're going from").withRequiredArg().required();
         OptionSpec<String> toArg = parser.accepts("to", "The Minecraft version you're going to").withRequiredArg().required();
         OptionSpec<File> configFile = parser.accepts("config", "The config file").withRequiredArg().ofType(File.class).defaultsTo(new File("config.txt"));
         OptionSet options = parser.parse(args);
+        if (options.has(helpArg)) {
+            try {
+                parser.printHelpOn(System.out);
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+            return;
+        }
 
         String fromVersion = options.valueOf(fromArg);
         String toVersion = options.valueOf(toArg);
@@ -46,11 +55,15 @@ public class MusicalCode {
 
         MemberPattern memberPattern = MemberPattern.parse(options.valueOf(configFile));
 
+        System.out.println("Comparing jars...");
+        System.out.println("====================================");
         try (JarFile fromJarFile = new JarFile(fromJar); JarFile toJarFile = new JarFile(toJar)) {
             JarComparer.compare(fromJarFile, toJarFile, memberPattern, System.out::println, System.err::println);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
+
+        System.out.println("Finished comparison");
     }
 
     private static File downloadAndRemap(String version) {
@@ -136,8 +149,6 @@ public class MusicalCode {
                 String etag = Files.readString(etagFile.toPath(), StandardCharsets.UTF_8);
                 connection.setRequestProperty("If-None-Match", etag);
             }
-
-            connection.setRequestProperty("Accept-Encoding", "gzip");
 
             connection.connect();
 

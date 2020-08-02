@@ -516,6 +516,9 @@ public class JarComparer {
                 }
                 default: throw new AssertionError("Unknown AbstractInsnNode type: " + fromInsn.getType());
             }
+
+            fromInsn = fromInsn.getNext();
+            toInsn = toInsn.getNext();
         }
 
         // check for trailing instructions in toInstructions
