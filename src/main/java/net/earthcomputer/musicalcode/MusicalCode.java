@@ -8,11 +8,14 @@ import net.fabricmc.stitch.commands.CommandMergeJar;
 import net.fabricmc.tinyremapper.OutputConsumerPath;
 import net.fabricmc.tinyremapper.TinyRemapper;
 import net.fabricmc.tinyremapper.TinyUtils;
+import org.objectweb.asm.commons.Remapper;
 
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.io.UncheckedIOException;
 import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
@@ -28,6 +31,7 @@ public class MusicalCode {
     private static final String CACHE_DIR = "cache";
     private static final String VERSION_MANIFEST = "https://launchermeta.mojang.com/mc/game/version_manifest.json";
     private static final String INTERMEDIARY_URL = "https://raw.githubusercontent.com/FabricMC/intermediary/master/mappings/%s.tiny";
+    private static final String YARN_URL = "https://maven.fabricmc.net/net/fabricmc/yarn/%1$s/yarn-%1$s-v2.jar";
 
     public static void main(String[] args) {
         OptionParser parser = new OptionParser();
@@ -35,6 +39,7 @@ public class MusicalCode {
         OptionSpec<String> fromArg = parser.accepts("from", "The Minecraft version you're going from").withRequiredArg().required();
         OptionSpec<String> toArg = parser.accepts("to", "The Minecraft version you're going to").withRequiredArg().required();
         OptionSpec<File> configFile = parser.accepts("config", "The config file").withRequiredArg().ofType(File.class).defaultsTo(new File("config.txt"));
+        OptionSpec<String> yarnArg = parser.accepts("yarn", "The yarn version to use for named mappings").withRequiredArg();
         OptionSet options = parser.parse(args);
         if (options.has(helpArg)) {
             try {
@@ -53,17 +58,37 @@ public class MusicalCode {
         File fromJar = downloadAndRemap(fromVersion);
         File toJar = downloadAndRemap(toVersion);
 
-        MemberPattern memberPattern = MemberPattern.parse(options.valueOf(configFile));
+        TinyRemapper[] remappersToClose;
+        Remapper intermediaryToYarnRemapper;
+        Remapper yarnToIntermediaryRemapper;
+        if (options.has(yarnArg)) {
+            String yarnVersion = options.valueOf(yarnArg);
+            File yarnJar = download(String.format(YARN_URL, yarnVersion), "yarn-" + yarnVersion + ".jar");
+            TinyRemapper i2y = getYarnRemapper(toJar, yarnJar, "intermediary", "named");
+            TinyRemapper y2i = getYarnRemapper(toJar, yarnJar, "named", "intermediary");
+            remappersToClose = new TinyRemapper[] {i2y, y2i};
+            intermediaryToYarnRemapper = i2y.getRemapper();
+            yarnToIntermediaryRemapper = y2i.getRemapper();
+        } else {
+            remappersToClose = new TinyRemapper[0];
+            intermediaryToYarnRemapper = yarnToIntermediaryRemapper = new Remapper() {};
+        }
+
+        MemberPattern memberPattern = MemberPattern.parse(options.valueOf(configFile), yarnToIntermediaryRemapper);
 
         System.out.println("Comparing jars...");
         System.out.println("====================================");
         try (JarFile fromJarFile = new JarFile(fromJar); JarFile toJarFile = new JarFile(toJar)) {
-            JarComparer.compare(fromJarFile, toJarFile, memberPattern, System.out::println, System.err::println);
+            JarComparer.compare(fromJarFile, toJarFile, memberPattern, intermediaryToYarnRemapper, System.out::println, System.err::println);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
 
         System.out.println("Finished comparison");
+        for (TinyRemapper remapper : remappersToClose) {
+            remapper.finish();
+        }
+
     }
 
     private static File downloadAndRemap(String version) {
@@ -122,12 +147,28 @@ public class MusicalCode {
         try (OutputConsumerPath outputConsumer = new OutputConsumerPath.Builder(output.toPath()).build()) {
             remapper.readInputs(input.toPath());
             remapper.apply(outputConsumer);
-            remapper.finish();
         } catch (IOException e) {
             throw new UncheckedIOException("Failed to remap " + version, e);
+        } finally {
+            remapper.finish();
         }
 
         return output;
+    }
+
+    private static TinyRemapper getYarnRemapper(File mcJar, File yarnJar, String fromNamespace, String toNamespace) {
+        System.out.println("Building yarn " + fromNamespace + " to " + toNamespace + " remapper...");
+        try (JarFile yarnJarFile = new JarFile(yarnJar)) {
+            BufferedReader tinyReader = new BufferedReader(new InputStreamReader(yarnJarFile.getInputStream(yarnJarFile.getEntry("mappings/mappings.tiny")), StandardCharsets.UTF_8));
+            TinyRemapper remapper = TinyRemapper.newRemapper()
+                    .withMappings(TinyUtils.createTinyMappingProvider(tinyReader, fromNamespace, toNamespace))
+                    .build();
+            remapper.readInputs(mcJar.toPath());
+            remapper.getRemapper(); // force read the mappings
+            return remapper;
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
     }
 
     @SuppressWarnings("ResultOfMethodCallIgnored")

@@ -1,6 +1,7 @@
 package net.earthcomputer.musicalcode;
 
 import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.commons.Remapper;
 import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.AnnotationNode;
 import org.objectweb.asm.tree.ClassNode;
@@ -34,16 +35,16 @@ import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 
 public class JarComparer {
-    public static void compare(JarFile fromJar, JarFile toJar, MemberPattern memberPattern, Consumer<String> outputLog, Consumer<String> errorLog) {
+    public static void compare(JarFile fromJar, JarFile toJar, MemberPattern memberPattern, Remapper intermediary2Yarn, Consumer<String> outputLog, Consumer<String> errorLog) {
         for (String className : memberPattern.getClasses()) {
             JarEntry fromEntry = fromJar.getJarEntry(className + ".class");
             JarEntry toEntry = toJar.getJarEntry(className + ".class");
             if (fromEntry == null) {
                 if (toEntry != null) {
-                    visitAddedRemoved(toJar, toEntry, memberPattern, "added", outputLog);
+                    visitAddedRemoved(toJar, toEntry, memberPattern, intermediary2Yarn, "added", outputLog);
                 }
             } else if (toEntry == null) {
-                visitAddedRemoved(fromJar, fromEntry, memberPattern, "removed", outputLog);
+                visitAddedRemoved(fromJar, fromEntry, memberPattern, intermediary2Yarn, "removed", outputLog);
             } else {
                 ClassReader fromReader, toReader;
                 try {
@@ -56,14 +57,14 @@ public class JarComparer {
                 ClassNode toClass = new ClassNode();
                 fromReader.accept(fromClass, ClassReader.SKIP_FRAMES);
                 toReader.accept(toClass, ClassReader.SKIP_FRAMES);
-                compareClasses(fromClass, toClass, memberPattern, outputLog);
+                compareClasses(fromClass, toClass, memberPattern, intermediary2Yarn, outputLog);
             }
         }
 
         memberPattern.assertUsed(errorLog);
     }
 
-    private static void visitAddedRemoved(JarFile jar, JarEntry entry, MemberPattern memberPattern, String action, Consumer<String> outputLog) {
+    private static void visitAddedRemoved(JarFile jar, JarEntry entry, MemberPattern memberPattern, Remapper intermediary2Yarn, String action, Consumer<String> outputLog) {
         ClassReader reader;
         try {
             reader = new ClassReader(jar.getInputStream(entry));
@@ -73,12 +74,12 @@ public class JarComparer {
         ClassNode node = new ClassNode();
         reader.accept(node, ClassReader.SKIP_FRAMES);
 
-        outputLog.accept("Class " + node.name + " was " + action);
+        outputLog.accept("Class " + intermediary2Yarn.map(node.name) + " was " + action);
 
         if (node.fields != null) {
             for (FieldNode field : node.fields) {
                 if (memberPattern.matchesField(node.name, field)) {
-                    outputLog.accept("Field " + node.name + "." + field.name + " was " + action);
+                    outputLog.accept("Field " + intermediary2Yarn.map(node.name) + "." + intermediary2Yarn.mapFieldName(node.name, field.name, field.desc) + " was " + action);
                 }
             }
         }
@@ -86,13 +87,13 @@ public class JarComparer {
         if (node.methods != null) {
             for (MethodNode method : node.methods) {
                 if (memberPattern.matchesMethod(node.name, method)) {
-                    outputLog.accept("Method " + node.name + "." + method.name + method.desc + " was " + action);
+                    outputLog.accept("Method " + intermediary2Yarn.map(node.name) + "." + intermediary2Yarn.mapMethodName(node.name, method.name, method.desc) + intermediary2Yarn.mapMethodDesc(method.desc) + " was " + action);
                 }
             }
         }
     }
 
-    private static void compareClasses(ClassNode fromClass, ClassNode toClass, MemberPattern memberPattern, Consumer<String> outputLog) {
+    private static void compareClasses(ClassNode fromClass, ClassNode toClass, MemberPattern memberPattern, Remapper intermediary2Yarn, Consumer<String> outputLog) {
         Map<String, FieldNode> fromFields = new LinkedHashMap<>();
         Map<String, FieldNode> toFields = new LinkedHashMap<>();
         if (fromClass.fields != null) {
@@ -109,17 +110,17 @@ public class JarComparer {
             if (memberPattern.matchesField(fromClass.name, fromField)) {
                 if (toFields.containsKey(fromField.name)) {
                     if (hasFieldChanged(fromField, toFields.get(fromField.name))) {
-                        outputLog.accept("Field " + fromClass.name + "." + fromField.name + " was changed");
+                        outputLog.accept("Field " + intermediary2Yarn.map(fromClass.name) + "." + intermediary2Yarn.mapFieldName(fromClass.name, fromField.name, fromField.desc) + " was changed");
                     }
                 } else {
-                    outputLog.accept("Field " + fromClass.name + "." + fromField.name + " was removed");
+                    outputLog.accept("Field " + intermediary2Yarn.map(fromClass.name) + "." + intermediary2Yarn.mapFieldName(fromClass.name, fromField.name, fromField.desc) + " was removed");
                 }
             }
         }
         for (FieldNode toField : toFields.values()) {
             if (!fromFields.containsKey(toField.name)) {
                 if (memberPattern.matchesField(fromClass.name, toField)) {
-                    outputLog.accept("Field " + toClass.name + "." + toField.name + " was added");
+                    outputLog.accept("Field " + intermediary2Yarn.map(toClass.name) + "." + intermediary2Yarn.mapFieldName(toClass.name, toField.name, toField.desc) + " was added");
                 }
             }
         }
@@ -140,17 +141,17 @@ public class JarComparer {
             if (memberPattern.matchesMethod(fromClass.name, fromMethod)) {
                 if (toMethods.containsKey(fromMethod.name + fromMethod.desc)) {
                     if (hasMethodChanged(fromMethod, toMethods.get(fromMethod.name + fromMethod.desc))) {
-                        outputLog.accept("Method " + fromClass.name + "." + fromMethod.name + fromMethod.desc + " was changed");
+                        outputLog.accept("Method " + intermediary2Yarn.map(fromClass.name) + "." + intermediary2Yarn.mapMethodName(fromClass.name, fromMethod.name, fromMethod.desc) + intermediary2Yarn.mapMethodDesc(fromMethod.desc) + " was changed");
                     }
                 } else {
-                    outputLog.accept("Method " + fromClass.name + "." + fromMethod.name + fromMethod.desc + " was removed");
+                    outputLog.accept("Method " + intermediary2Yarn.map(fromClass.name) + "." + intermediary2Yarn.mapMethodName(fromClass.name, fromMethod.name, fromMethod.desc) + intermediary2Yarn.mapMethodDesc(fromMethod.desc) + " was removed");
                 }
             }
         }
         for (MethodNode toMethod : toMethods.values()) {
             if (!fromMethods.containsKey(toMethod.name + toMethod.desc)) {
                 if (memberPattern.matchesMethod(fromClass.name, toMethod)) {
-                    outputLog.accept("Method " + toClass.name + "." + toMethod.name + toMethod.desc + " was added");
+                    outputLog.accept("Method " + intermediary2Yarn.map(toClass.name) + "." + intermediary2Yarn.mapMethodName(toClass.name, toMethod.name, toMethod.desc) + intermediary2Yarn.mapMethodDesc(toMethod.desc) + " was added");
                 }
             }
         }

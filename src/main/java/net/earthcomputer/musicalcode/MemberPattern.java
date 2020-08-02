@@ -1,5 +1,6 @@
 package net.earthcomputer.musicalcode;
 
+import org.objectweb.asm.commons.Remapper;
 import org.objectweb.asm.tree.FieldNode;
 import org.objectweb.asm.tree.MethodNode;
 
@@ -27,7 +28,7 @@ public abstract class MemberPattern {
     public abstract boolean matchesMethod(String className, MethodNode method);
     public abstract void assertUsed(Consumer<String> errorLog);
 
-    public static MemberPattern parse(File file) {
+    public static MemberPattern parse(File file, Remapper yarn2intermediary) {
         List<String> lines;
         try {
             lines = Files.readAllLines(file.toPath());
@@ -42,20 +43,20 @@ public abstract class MemberPattern {
             }
             line = line.replace(" ", "");
             if (!line.isEmpty()) {
-                memberPatterns.add(parse(line));
+                memberPatterns.add(parse(line, yarn2intermediary));
             }
         }
 
         return new CombinedMemberPattern(memberPatterns);
     }
 
-    public static MemberPattern parse(String pattern) {
+    public static MemberPattern parse(String pattern, Remapper yarn2Intermediary) {
         int dotIndex = pattern.indexOf('.');
         if (dotIndex == -1) {
             if (!INTERNAL_NAME_PATTERN.matcher(pattern).matches()) {
                 throw new IllegalArgumentException(pattern + " does not match the pattern for class names");
             }
-            return new ClassPattern(pattern);
+            return new ClassPattern(yarn2Intermediary.map(pattern));
         }
 
         String className = pattern.substring(0, dotIndex);
@@ -63,13 +64,25 @@ public abstract class MemberPattern {
         if (!INTERNAL_NAME_PATTERN.matcher(className).matches()) {
             throw new IllegalArgumentException(className + " does not match the pattern for class names");
         }
+        if (member.equals("*")) {
+            return new ClassPattern(yarn2Intermediary.map(className));
+        }
 
         int parenthesisIndex = member.indexOf('(');
         if (parenthesisIndex == -1) {
-            if (!IDENTIFIER_PATTERN.matcher(member).matches()) {
-                throw new IllegalArgumentException(member + " does not match the pattern for field names");
+            int colonIndex = member.indexOf(":");
+            if (colonIndex == -1) {
+                throw new IllegalArgumentException("Member missing descriptor: " + member);
             }
-            return new FieldPattern(className, member);
+            String fieldName = member.substring(0, colonIndex);
+            String fieldDesc = member.substring(colonIndex + 1);
+            if (!IDENTIFIER_PATTERN.matcher(fieldName).matches()) {
+                throw new IllegalArgumentException(fieldName + " does not match the pattern for field names");
+            }
+            if (!TYPE_DESC_PATTERN.matcher(fieldDesc).matches()) {
+                throw new IllegalArgumentException(fieldDesc + " does not match the pattern for field descriptors");
+            }
+            return new FieldPattern(yarn2Intermediary.map(className), yarn2Intermediary.mapFieldName(className, fieldName, fieldDesc));
         }
 
         String methodName = member.substring(0, parenthesisIndex);
@@ -80,7 +93,11 @@ public abstract class MemberPattern {
         if (!METHOD_DESC_PATTERN.matcher(methodDesc).matches()) {
             throw new IllegalArgumentException(methodDesc + " does not match the pattern for method descriptors");
         }
-        return new MethodPattern(className, methodName, methodDesc);
+        return new MethodPattern(
+                yarn2Intermediary.map(className),
+                yarn2Intermediary.mapMethodName(className, methodName, methodDesc),
+                yarn2Intermediary.mapMethodDesc(methodDesc)
+        );
     }
 
     private static class CombinedMemberPattern extends MemberPattern {
