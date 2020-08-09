@@ -47,7 +47,7 @@ pluginManagement {
 Then add the following to `build.gradle`:
 ```groovy
 plugins {
-    id 'musical-code' version '1.0'
+    id 'musical-code' version '1.1'
 }
 // ...
 musicalCode {
