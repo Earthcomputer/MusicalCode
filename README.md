@@ -7,7 +7,7 @@ Configure MusicalCode to listen for changes in Minecraft methods. Run it every u
 MusicalCode is configured in a single text file format. Currently, the following are supported:
 ```
 # Line comment
-net/minecraft/client/MinecraftClient/*   # Listens for changes in all members inside Screen
+net/minecraft/client/MinecraftClient.*   # Listens for changes in all members inside MinecraftClient
 net/minecraft/block/GrassPathBlock.SHAPE : Lnet/minecraft/util/shape/VoxelShape;   # Listens for changes in this specific field
 net/minecraft/client/gui/hud/InGameHud.renderCrosshair (Lnet/minecraft/client/util/math/MatrixStack;)V   # Listens for changes in this specific method
 ```

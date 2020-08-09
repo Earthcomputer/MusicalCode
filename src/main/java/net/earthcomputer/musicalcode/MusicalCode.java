@@ -5,6 +5,7 @@ import joptsimple.OptionParser;
 import joptsimple.OptionSet;
 import joptsimple.OptionSpec;
 import net.fabricmc.stitch.commands.CommandMergeJar;
+import net.fabricmc.stitch.util.Pair;
 import net.fabricmc.tinyremapper.OutputConsumerPath;
 import net.fabricmc.tinyremapper.TinyRemapper;
 import net.fabricmc.tinyremapper.TinyUtils;
@@ -25,6 +26,7 @@ import java.net.URL;
 import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.util.function.Consumer;
 import java.util.jar.JarFile;
 
@@ -34,6 +36,9 @@ public class MusicalCode {
     private static final String VERSION_MANIFEST = "https://launchermeta.mojang.com/mc/game/version_manifest.json";
     private static final String INTERMEDIARY_URL = "https://raw.githubusercontent.com/FabricMC/intermediary/master/mappings/%s.tiny";
     private static final String YARN_URL = "https://maven.fabricmc.net/net/fabricmc/yarn/%1$s/yarn-%1$s-v2.jar";
+    private static boolean refreshCache;
+    private static boolean downloadedFileChanged;
+    private static boolean yarnChanged;
 
     public static void main(String... args) {
         OptionParser parser = new OptionParser();
@@ -44,6 +49,7 @@ public class MusicalCode {
         OptionSpec<String> yarnArg = parser.accepts("yarn", "The yarn version to use for named mappings").withRequiredArg();
         OptionSpec<File> outputArg = parser.accepts("output", "The output file").withRequiredArg().ofType(File.class);
         OptionSpec<File> cacheDirArg = parser.accepts("cacheDir", "The cache directory").withRequiredArg().ofType(File.class).defaultsTo(new File("cache"));
+        OptionSpec<Boolean> refreshCacheArg = parser.accepts("refreshCache", "If present, always re-download files rather than using what's already in the cache.").withOptionalArg().ofType(Boolean.class);
         OptionSet options = parser.parse(args);
         if (options.has(helpArg)) {
             try {
@@ -53,6 +59,7 @@ public class MusicalCode {
             }
             return;
         }
+        refreshCache = options.has(refreshCacheArg) && (options.valueOf(refreshCacheArg) == null || options.valueOf(refreshCacheArg));
 
         File cacheDir = options.valueOf(cacheDirArg);
         String fromVersion = options.valueOf(fromArg);
@@ -60,17 +67,28 @@ public class MusicalCode {
         if (fromVersion.equals(toVersion)) {
             throw new RuntimeException("fromVersion == toVersion");
         }
-        File fromJar = downloadAndRemap(cacheDir, fromVersion);
-        File toJar = downloadAndRemap(cacheDir, toVersion);
+        String yarnVersion;
+        File yarnJar;
+        if (options.has(yarnArg)) {
+            yarnVersion = options.valueOf(yarnArg);
+            yarnJar = download(cacheDir, String.format(YARN_URL, yarnVersion), "yarn-" + yarnVersion + ".jar");
+            yarnChanged = downloadedFileChanged;
+        } else {
+            yarnVersion = null;
+            yarnJar = null;
+        }
+
+        File versionManifestFile = download(cacheDir, VERSION_MANIFEST, "version_manifest.json");
+
+        Pair<File, File> fromJar = downloadAndRemap(cacheDir, versionManifestFile, fromVersion, yarnJar, yarnVersion);
+        Pair<File, File> toJar = downloadAndRemap(cacheDir, versionManifestFile, toVersion, yarnJar, yarnVersion);
 
         TinyRemapper[] remappersToClose;
         Remapper intermediaryToYarnRemapper;
         Remapper yarnToIntermediaryRemapper;
-        if (options.has(yarnArg)) {
-            String yarnVersion = options.valueOf(yarnArg);
-            File yarnJar = download(cacheDir, String.format(YARN_URL, yarnVersion), "yarn-" + yarnVersion + ".jar");
-            TinyRemapper i2y = getYarnRemapper(fromJar, yarnJar, "intermediary", "named");
-            TinyRemapper y2i = getYarnRemapper(fromJar, yarnJar, "named", "intermediary");
+        if (yarnVersion != null) {
+            TinyRemapper i2y = getYarnRemapper(fromJar.getLeft(), yarnJar, "intermediary", "named");
+            TinyRemapper y2i = getYarnRemapper(fromJar.getRight(), yarnJar, "named", "intermediary");
             remappersToClose = new TinyRemapper[] {i2y, y2i};
             intermediaryToYarnRemapper = i2y.getRemapper();
             yarnToIntermediaryRemapper = y2i.getRemapper();
@@ -97,7 +115,7 @@ public class MusicalCode {
 
         System.out.println("Comparing jars...");
         System.out.println("====================================");
-        try (JarFile fromJarFile = new JarFile(fromJar); JarFile toJarFile = new JarFile(toJar)) {
+        try (JarFile fromJarFile = new JarFile(fromJar.getLeft()); JarFile toJarFile = new JarFile(toJar.getLeft())) {
             JarComparer.compare(fromJarFile, toJarFile, memberPattern, intermediaryToYarnRemapper, output, System.err::println);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
@@ -115,13 +133,12 @@ public class MusicalCode {
 
     }
 
-    private static File downloadAndRemap(File cacheDir, String version) {
-        File unmapped = downloadMcJar(cacheDir, version);
-        return remapMcJar(cacheDir, version, unmapped);
+    private static Pair<File, File> downloadAndRemap(File cacheDir, File versionManifestFile, String version, File yarnJar, String yarnVersion) {
+        File unmapped = downloadMcJar(cacheDir, versionManifestFile, version);
+        return remapMcJar(cacheDir, version, unmapped, downloadedFileChanged, yarnJar, yarnVersion);
     }
 
-    private static File downloadMcJar(File cacheDir, String version) {
-        File versionManifestFile = download(cacheDir, VERSION_MANIFEST, "version_manifest.json");
+    private static File downloadMcJar(File cacheDir, File versionManifestFile, String version) {
         VersionManifest versionManifest;
         try {
             versionManifest = GSON.fromJson(new FileReader(versionManifestFile), VersionManifest.class);
@@ -148,36 +165,74 @@ public class MusicalCode {
         }
 
         File clientJar = download(cacheDir, v.downloads.client.url, version + "-client.jar");
+        boolean clientChanged = downloadedFileChanged;
         File serverJar = download(cacheDir, v.downloads.server.url, version + "-server.jar");
+        boolean serverChanged = downloadedFileChanged;
         File mergedJar = new File(cacheDir, version + "-merged.jar");
 
         System.out.println("Merging " + version + " jars...");
-        try {
-            new CommandMergeJar().run(new String[] {clientJar.getAbsolutePath(), serverJar.getAbsolutePath(), mergedJar.getAbsolutePath()});
-        } catch (Exception e) {
-            throw new RuntimeException(e);
+        boolean redoRemap = refreshCache || !mergedJar.exists() || clientChanged || serverChanged;
+        if (redoRemap) {
+            try {
+                new CommandMergeJar().run(new String[] {clientJar.getAbsolutePath(), serverJar.getAbsolutePath(), mergedJar.getAbsolutePath()});
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
         }
+        downloadedFileChanged = redoRemap;
 
         return mergedJar;
     }
 
-    private static File remapMcJar(File cacheDir, String version, File input) {
+    private static Pair<File, File> remapMcJar(File cacheDir, String version, File input, boolean inputChanged, File yarnJar, String yarnVersion) {
         File intermediaryMappings = download(cacheDir, String.format(INTERMEDIARY_URL, version), version + "-intermediary.tiny");
+        boolean intermediaryMappingsChanged = downloadedFileChanged;
+
         System.out.println("Remapping " + version + " to intermediary...");
-        TinyRemapper remapper = TinyRemapper.newRemapper()
-                .withMappings(TinyUtils.createTinyMappingProvider(intermediaryMappings.toPath(), "official", "intermediary"))
-                .build();
-        File output = new File(cacheDir, version + "-intermediary.jar");
-        try (OutputConsumerPath outputConsumer = new OutputConsumerPath.Builder(output.toPath()).build()) {
-            remapper.readInputs(input.toPath());
-            remapper.apply(outputConsumer);
-        } catch (IOException e) {
-            throw new UncheckedIOException("Failed to remap " + version, e);
-        } finally {
-            remapper.finish();
+        File intermediary = new File(cacheDir, version + "-intermediary.jar");
+        boolean intermediaryChanged = false;
+        if (refreshCache || !intermediary.exists() || inputChanged || intermediaryMappingsChanged) {
+            TinyRemapper remapper = TinyRemapper.newRemapper()
+                    .withMappings(TinyUtils.createTinyMappingProvider(intermediaryMappings.toPath(), "official", "intermediary"))
+                    .build();
+            try (OutputConsumerPath outputConsumer = new OutputConsumerPath.Builder(intermediary.toPath()).build()) {
+                remapper.readInputs(input.toPath());
+                remapper.apply(outputConsumer);
+            } catch (IOException e) {
+                throw new UncheckedIOException("Failed to remap " + version, e);
+            } finally {
+                remapper.finish();
+            }
+            intermediaryChanged = true;
         }
 
-        return output;
+        System.out.println("Remapping " + version + " to yarn...");
+        File yarn;
+        if (yarnVersion != null) {
+            yarn = new File(cacheDir, version + "-yarn-" + yarnVersion + ".jar");
+            if (refreshCache || !yarn.exists() || intermediaryChanged || yarnChanged) {
+                TinyRemapper remapper = null;
+                try (JarFile yarnJarFile = new JarFile(yarnJar);
+                     OutputConsumerPath outputConsumer = new OutputConsumerPath.Builder(yarn.toPath()).build()) {
+                    BufferedReader tinyReader = new BufferedReader(new InputStreamReader(yarnJarFile.getInputStream(yarnJarFile.getEntry("mappings/mappings.tiny")), StandardCharsets.UTF_8));
+                    remapper = TinyRemapper.newRemapper()
+                            .withMappings(TinyUtils.createTinyMappingProvider(tinyReader, "intermediary", "named"))
+                            .build();
+                    remapper.readInputs(intermediary.toPath());
+                    remapper.apply(outputConsumer);
+                } catch (IOException e) {
+                    throw new UncheckedIOException("Failed to remap " + version, e);
+                } finally {
+                    if (remapper != null) {
+                        remapper.finish();
+                    }
+                }
+            }
+        } else {
+            yarn = null;
+        }
+
+        return Pair.of(intermediary, yarn);
     }
 
     private static TinyRemapper getYarnRemapper(File fromJar, File yarnJar, String fromNamespace, String toNamespace) {
@@ -210,7 +265,7 @@ public class MusicalCode {
 
         try {
             HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-            if (destFile.exists() && etagFile.exists()) {
+            if (!refreshCache && destFile.exists() && etagFile.exists()) {
                 String etag = com.google.common.io.Files.asCharSource(etagFile, StandardCharsets.UTF_8).read();
                 connection.setRequestProperty("If-None-Match", etag);
             }
@@ -223,12 +278,16 @@ public class MusicalCode {
             }
 
             long lastModified = connection.getHeaderFieldDate("Last-Modified", -1);
-            if (destFile.exists() && (responseCode == HttpURLConnection.HTTP_NOT_MODIFIED || lastModified > 0 && destFile.lastModified() >= lastModified))
+            if (destFile.exists() && (responseCode == HttpURLConnection.HTTP_NOT_MODIFIED || lastModified > 0 && destFile.lastModified() >= lastModified)) {
+                downloadedFileChanged = false;
                 return destFile;
+            }
+
+            downloadedFileChanged = true;
 
             destFile.getParentFile().mkdirs();
             try {
-                Files.copy(connection.getInputStream(), destFile.toPath());
+                Files.copy(connection.getInputStream(), destFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
             } catch (IOException e) {
                 destFile.delete();
                 throw e;
