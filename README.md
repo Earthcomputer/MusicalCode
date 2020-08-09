@@ -51,7 +51,7 @@ plugins {
 }
 // ...
 musicalCode {
-    config 'musical-config.txt'
+    config 'musical-config.txt' // Input file, relative to the root project directory
 }
 ```
 
