@@ -19,6 +19,7 @@ import java.util.regex.Pattern;
 
 public abstract class MemberPattern {
     private static final Pattern IDENTIFIER_PATTERN = Pattern.compile("[A-Za-z_$][A-Za-z0-9_$]*");
+    private static final Pattern METHOD_NAME_PATTERN = Pattern.compile(IDENTIFIER_PATTERN.pattern() + "|<init>|<clinit>");
     private static final Pattern INTERNAL_NAME_PATTERN = Pattern.compile(IDENTIFIER_PATTERN.pattern() + "(?:/" + IDENTIFIER_PATTERN.pattern() + ")*");
     private static final Pattern TYPE_DESC_PATTERN = Pattern.compile("\\[*(?:[BCDFIJLZ]|L" + INTERNAL_NAME_PATTERN.pattern() + ";)");
     private static final Pattern METHOD_DESC_PATTERN = Pattern.compile("\\((?:" + TYPE_DESC_PATTERN.pattern() + ")*\\)(?:V|(?:" + TYPE_DESC_PATTERN.pattern() + "))");
@@ -87,7 +88,7 @@ public abstract class MemberPattern {
 
         String methodName = member.substring(0, parenthesisIndex);
         String methodDesc = member.substring(parenthesisIndex);
-        if (!IDENTIFIER_PATTERN.matcher(methodName).matches()) {
+        if (!METHOD_NAME_PATTERN.matcher(methodName).matches()) {
             throw new IllegalArgumentException(methodName + " does not match the pattern for method names");
         }
         if (!METHOD_DESC_PATTERN.matcher(methodDesc).matches()) {
