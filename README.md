@@ -7,10 +7,11 @@ Configure MusicalCode to listen for changes in Minecraft methods. Run it every u
 MusicalCode is configured in a single text file format. Currently, the following are supported:
 ```
 # Line comment
-net/minecraft/client/MinecraftClient.*   # Listens for changes in all members inside MinecraftClient
-net/minecraft/block/GrassPathBlock.SHAPE : Lnet/minecraft/util/shape/VoxelShape;   # Listens for changes in this specific field
-net/minecraft/client/gui/hud/InGameHud.renderCrosshair (Lnet/minecraft/client/util/math/MatrixStack;)V   # Listens for changes in this specific method
+net/minecraft/client/MinecraftClient;   # Listens for changes in all members inside MinecraftClient
+net/minecraft/block/GrassPathBlock;SHAPE:Lnet/minecraft/util/shape/VoxelShape;   # Listens for changes in this specific field
+net/minecraft/client/gui/hud/InGameHud;renderCrosshair(Lnet/minecraft/client/util/math/MatrixStack;)V   # Listens for changes in this specific method
 ```
+The output of MinecraftDev's "Copy Mixin Target Reference" is compatible with the config format shown above.
 More types of listeners may be added in the future.
 
 To quickly enter these values, it may be helpful to use the "Copy Mixin Target Reference" feature of Minecraft Dev,
@@ -47,7 +48,7 @@ pluginManagement {
 Then add the following to `build.gradle`:
 ```groovy
 plugins {
-    id 'musical-code' version '1.2'
+    id 'musical-code' version '1.3'
 }
 // ...
 musicalCode {
