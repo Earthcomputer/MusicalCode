@@ -52,20 +52,24 @@ public abstract class MemberPattern {
     }
 
     public static MemberPattern parse(String pattern, Remapper yarn2Intermediary) {
-        int dotIndex = pattern.indexOf('.');
-        if (dotIndex == -1) {
+        int semicolonIndex = pattern.indexOf(';');
+        if (semicolonIndex == -1) {
             if (!INTERNAL_NAME_PATTERN.matcher(pattern).matches()) {
                 throw new IllegalArgumentException(pattern + " does not match the pattern for class names");
             }
             return new ClassPattern(yarn2Intermediary.map(pattern));
         }
 
-        String className = pattern.substring(0, dotIndex);
-        String member = pattern.substring(dotIndex + 1);
+        String className = pattern.substring(0, semicolonIndex);
+        // remove L from Lnet to allow remapping. Allow \ as escape character
+        if (className.startsWith("Lnet") || className.startsWith("\\")) {
+            className = className.substring(1);
+        }
+        String member = pattern.substring(semicolonIndex + 1);
         if (!INTERNAL_NAME_PATTERN.matcher(className).matches()) {
             throw new IllegalArgumentException(className + " does not match the pattern for class names");
         }
-        if (member.equals("*")) {
+        if (member.isEmpty() || member.equals("*")) {
             return new ClassPattern(yarn2Intermediary.map(className));
         }
 
